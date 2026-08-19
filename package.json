@@ -1,0 +1,23 @@
+{
+  "name": "saverai-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Microservicio: bot de WhatsApp para carga de gastos por audio/texto (CapsaAI / SaverAI).",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "audio": "tsx scripts/probar-audio.ts",
+    "link-user": "tsx scripts/link-user.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "pg": "^8.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
