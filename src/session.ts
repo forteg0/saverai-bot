@@ -88,6 +88,64 @@ export function clearSession(userId: string) {
   sessions.delete(userId)
 }
 
+/** True si hay una conversacion (borrador) en curso para el usuario. */
+export function hasActiveDraft(userId: string): boolean {
+  return sessions.has(userId)
+}
+
+/**
+ * Ultimo gasto REALMENTE registrado por usuario, para poder deshacerlo si el
+ * bot entendio mal o el usuario se arrepiente. Es aparte de la conversacion:
+ * vive despues de publicar el gasto, con su propia expiracion.
+ */
+interface UndoTarget {
+  externalMessageId: string
+  detail: string
+  at: number
+}
+const lastRegistered = new Map<string, UndoTarget>()
+const UNDO_TTL_MS = 30 * 60 * 1000
+
+/** Marca el ultimo gasto publicado como candidato a deshacer. */
+export function rememberLastRegistered(
+  userId: string,
+  target: { externalMessageId: string; detail: string },
+) {
+  lastRegistered.set(userId, { ...target, at: Date.now() })
+}
+
+/** Devuelve el gasto que se puede deshacer (si no expiro), sin borrarlo. */
+export function getUndoTarget(userId: string): { externalMessageId: string; detail: string } | null {
+  const target = lastRegistered.get(userId)
+  if (!target) return null
+  if (Date.now() - target.at > UNDO_TTL_MS) {
+    lastRegistered.delete(userId)
+    return null
+  }
+  return { externalMessageId: target.externalMessageId, detail: target.detail }
+}
+
+/** Olvida el candidato a deshacer (tras borrarlo, o al registrar otro). */
+export function clearUndoTarget(userId: string) {
+  lastRegistered.delete(userId)
+}
+
+/**
+ * Intencion de deshacer/borrar el ultimo gasto: "borralo", "eliminá",
+ * "sacalo", "entendiste mal", "esta mal", "deshacelo". Se hace amplio a
+ * proposito (es la respuesta esperada a "avisame si querés borrarlo o si
+ * entendí mal"), pero sin pisar un "mal" suelto (p. ej. "gasté 1000 en el mall").
+ */
+export function isUndoIntent(text: string): boolean {
+  const clean = normalizeText(text)
+  if (/\b(borr|elimin)/.test(clean)) return true
+  if (/\bsaca(lo|r)?\b/.test(clean)) return true
+  if (/(entendiste|entendi)\s+(mal|cualquiera|otra|todo)/.test(clean)) return true
+  if (/(esta|estuvo|quedo)\s+mal/.test(clean)) return true
+  if (/\b(deshac|revert|rollback)/.test(clean)) return true
+  return false
+}
+
 /** Borra las conversaciones sin actividad por mas de SESSION_TTL_MS. */
 function sweepExpiredSessions(now: number) {
   for (const [userId, session] of sessions) {

@@ -9,9 +9,17 @@ import {
   verifyChallenge,
 } from "./meta"
 import { transcribeAudio } from "./transcribe"
-import { describeExpense, handleIncomingMessage } from "./session"
+import {
+  clearUndoTarget,
+  describeExpense,
+  getUndoTarget,
+  handleIncomingMessage,
+  hasActiveDraft,
+  isUndoIntent,
+  rememberLastRegistered,
+} from "./session"
 import { getBotContext } from "./context"
-import { publishConfirmedExpense } from "./backend"
+import { deleteConfirmedExpense, publishConfirmedExpense } from "./backend"
 import { debug, error as logError, info, setDebug, warn } from "./log"
 
 /**
@@ -156,7 +164,7 @@ function describeBackendResult(
   detail: string,
 ): string {
   if (result.status === "created") {
-    return `✅ Registré ${detail}.`
+    return `✅ ${detail} registrado. Avisame si querés borrarlo o si entendí mal.`
   }
   if (result.status === "duplicate") {
     return "Ese gasto ya estaba cargado, no lo dupliqué 👍"
@@ -169,6 +177,36 @@ function describeBackendResult(
     return "No pude autenticarme con el backend. Avisale al equipo (firma invalida)."
   }
   return "Hubo un problema al guardarlo. Probá de nuevo en un rato."
+}
+
+/**
+ * Deshace (borra) el último gasto cargado por el usuario. El bot no toca la
+ * base: le pide al backend que lo elimine por su externalMessageId.
+ */
+async function handleUndo(userId: string, phone: string): Promise<void> {
+  const target = getUndoTarget(userId)
+  if (!target) {
+    await sendText(phone, "No tengo ningún gasto reciente tuyo para borrar 🤔", config)
+    return
+  }
+
+  try {
+    const result = await deleteConfirmedExpense(userId, target.externalMessageId, config)
+    if (result.status === "deleted") {
+      clearUndoTarget(userId)
+      info(`↩ borrado: ${target.detail} — ${userId}`)
+      await sendText(phone, `Listo, borré ${target.detail}. Como si nada 👍`, config)
+    } else if (result.status === "not_found") {
+      clearUndoTarget(userId)
+      await sendText(phone, "Ese gasto ya no estaba cargado, así que no hay nada que borrar 👍", config)
+    } else {
+      warn(`backend no borró (${result.httpStatus}/${result.status}): ${target.detail}`)
+      await sendText(phone, "No pude borrarlo (el backend lo rechazó). Avisale al equipo 🙏", config)
+    }
+  } catch (err) {
+    logError("No pude borrar en el backend", err)
+    await sendText(phone, "No pude borrarlo ahora (el servidor no responde). Probá de nuevo en un rato 🙏", config)
+  }
 }
 
 async function handleMessage(message: WhatsAppMessage): Promise<void> {
@@ -200,6 +238,14 @@ async function handleMessage(message: WhatsAppMessage): Promise<void> {
 
   debug(`${message.type} de ${message.from} → "${text}"`)
 
+  // 1.5) ¿Quiere deshacer el último gasto? ("borralo", "entendiste mal", ...).
+  // Solo si NO hay una conversación en curso: ahí "borrar" cancela el borrador,
+  // no el gasto ya cargado (de eso se ocupa handleIncomingMessage).
+  if (isUndoIntent(text) && !hasActiveDraft(userId)) {
+    await handleUndo(userId, phone)
+    return
+  }
+
   // 2) Conversar: completar el gasto y decidir si se publica.
   const context = await getBotContext(userId, config.backendUrl)
   const outcome = await handleIncomingMessage({ userId, messageId: message.id, text }, config.ai, context)
@@ -214,8 +260,12 @@ async function handleMessage(message: WhatsAppMessage): Promise<void> {
   const detail = describeExpense(outcome.confirmed.expense)
   try {
     const result = await publishConfirmedExpense(outcome.confirmed, config)
-    if (result.status === "created") info(`✔ ${detail} — ${userId}`)
-    else if (result.status === "duplicate") info(`= duplicado: ${detail} — ${userId}`)
+    if (result.status === "created") {
+      info(`✔ ${detail} — ${userId}`)
+      // Guardar como candidato a deshacer: el backend usa este messageId como
+      // external_message_id, así que alcanza para pedir el borrado después.
+      rememberLastRegistered(userId, { externalMessageId: outcome.confirmed.messageId, detail })
+    } else if (result.status === "duplicate") info(`= duplicado: ${detail} — ${userId}`)
     else warn(`backend rechazó (${result.httpStatus}/${result.status}): ${detail}`)
     await sendText(phone, describeBackendResult(result, detail), config)
   } catch (err) {

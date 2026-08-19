@@ -63,3 +63,50 @@ export async function publishConfirmedExpense(
     raw: parsed,
   }
 }
+
+export interface DeleteExpenseResult {
+  httpStatus: number
+  /** "deleted" | "not_found" | "unauthorized" | ... */
+  status: string
+  raw: unknown
+}
+
+/**
+ * Le pide al backend que BORRE un gasto ya cargado (rollback).
+ *
+ * El bot no toca la base: manda el `externalMessageId` firmado con la misma
+ * HMAC que los confirmados y el backend elimina la fila. Respuestas: `200`
+ * borrado · `404` no existia · `401` firma invalida.
+ */
+export async function deleteConfirmedExpense(
+  userId: string,
+  externalMessageId: string,
+  config: BotConfig,
+): Promise<DeleteExpenseResult> {
+  const body = JSON.stringify({ userId, externalMessageId })
+  const signature = "sha256=" + createHmac("sha256", config.webhookSecret).update(body).digest("hex")
+
+  const response = await fetch(`${config.backendUrl}/webhooks/whatsapp/expenses/deleted`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-capsa-signature": signature,
+    },
+    body,
+  })
+
+  const text = await response.text()
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    parsed = text
+  }
+
+  const asRecord = (parsed ?? {}) as Record<string, unknown>
+  return {
+    httpStatus: response.status,
+    status: typeof asRecord.status === "string" ? asRecord.status : String(response.status),
+    raw: parsed,
+  }
+}
