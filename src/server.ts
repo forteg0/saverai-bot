@@ -10,11 +10,13 @@ import {
 } from "./meta"
 import { transcribeAudio } from "./transcribe"
 import {
+  clearSession,
   clearUndoTarget,
   describeExpense,
   getUndoTarget,
   handleIncomingMessage,
   hasActiveDraft,
+  isStartGreeting,
   isUndoIntent,
   rememberLastRegistered,
 } from "./session"
@@ -38,6 +40,14 @@ const config = getBotConfig()
 setDebug(config.debug)
 
 const INBOUND_PATH = "/webhooks/whatsapp/inbound"
+
+/**
+ * Bienvenida del chat. La dispara el botón de la app (abre WhatsApp con el
+ * mensaje "Busco a mi bot de consumos" ya escrito) o un "hola" suelto.
+ */
+const WELCOME_MESSAGE =
+  "¡Qué tal! 👋 Acá estoy. Mandame tus consumos —por texto o por audio— y yo me encargo de registrarlos 💸\n" +
+  'Por ejemplo: "gasté 5000 en comida en Coto".'
 
 /**
  * Anti-reproceso en memoria. Meta reintenta si tardamos en responder 200, y
@@ -237,6 +247,13 @@ async function handleMessage(message: WhatsAppMessage): Promise<void> {
   }
 
   debug(`${message.type} de ${message.from} → "${text}"`)
+
+  // 1.4) Saludo de inicio (botón de la app / "hola"): bienvenida y arranca limpio.
+  if (isStartGreeting(text)) {
+    clearSession(userId)
+    await sendText(phone, WELCOME_MESSAGE, config)
+    return
+  }
 
   // 1.5) ¿Quiere deshacer el último gasto? ("borralo", "entendiste mal", ...).
   // Solo si NO hay una conversación en curso: ahí "borrar" cancela el borrador,

@@ -146,6 +146,38 @@ export function isUndoIntent(text: string): boolean {
   return false
 }
 
+/**
+ * Saludo de arranque del chat. Lo dispara el botón de la app (que abre WhatsApp
+ * con un mensaje ya escrito), pero también cae acá un "hola" suelto. Sirve para
+ * responder una bienvenida en vez de saltar directo a "¿cuánto gastaste?".
+ *
+ * Solo matchea saludos "puros": si el mensaje trae un gasto ("hola, gasté 5000
+ * en Coto") NO se toma como saludo y sigue el flujo normal.
+ */
+const START_PHRASES = new Set([
+  "hola",
+  "hola bot",
+  "buenas",
+  "buenas bot",
+  "hola que tal",
+  "buenas que tal",
+  "empezar",
+  "arrancar",
+  "start",
+  "menu",
+  "ayuda",
+])
+
+export function isStartGreeting(text: string): boolean {
+  const clean = normalizeCommand(text)
+  if (!clean) return false
+  // Frase exacta del botón de la app (y variantes cercanas).
+  if (clean.includes("busco a mi bot") || clean.includes("bot de consumos")) return true
+  // Saludo suelto, pero solo si NO viene con un monto (si no, es un gasto).
+  if (parseAmountAnswer(text) != null) return false
+  return START_PHRASES.has(clean)
+}
+
 /** Borra las conversaciones sin actividad por mas de SESSION_TTL_MS. */
 function sweepExpiredSessions(now: number) {
   for (const [userId, session] of sessions) {
@@ -290,6 +322,12 @@ function applyAnswer(
       const category = parseCategoryAnswer(text, context)
       if (!category) return false
       expense.category = category
+      return true
+    }
+    case "card": {
+      const card = parseCardAnswer(text, context)
+      if (!card) return false
+      expense.card = card
       return true
     }
     default:
