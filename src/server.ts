@@ -13,15 +13,17 @@ import {
   clearSession,
   clearUndoTarget,
   describeExpense,
+  extractVerificationCode,
   getUndoTarget,
   handleIncomingMessage,
   hasActiveDraft,
   isStartGreeting,
   isUndoIntent,
+  isVerificationStart,
   rememberLastRegistered,
 } from "./session"
 import { getBotContext } from "./context"
-import { deleteConfirmedExpense, publishConfirmedExpense } from "./backend"
+import { confirmVerificationCode, deleteConfirmedExpense, publishConfirmedExpense } from "./backend"
 import { debug, error as logError, info, setDebug, warn } from "./log"
 
 /**
@@ -78,6 +80,12 @@ function alreadySeen(id: string): boolean {
  * paralelo entre si.
  */
 const userQueues = new Map<string, Promise<void>>()
+
+/**
+ * Usuarios que arrancaron la verificación de su número y de los que estamos
+ * esperando que manden el código de 6 dígitos. En memoria, efímero.
+ */
+const awaitingVerification = new Set<string>()
 
 function enqueueMessage(message: WhatsAppMessage): void {
   const userId = toWhatsappUserId(message.from)
@@ -190,6 +198,51 @@ function describeBackendResult(
 }
 
 /**
+ * Verificación del número: el usuario abrió el chat desde la app (le pedimos el
+ * código) y después manda el código de 6 dígitos, que confirmamos con el backend.
+ */
+async function handleVerification(userId: string, phone: string, text: string): Promise<void> {
+  // Arranque: recién abrió el chat desde la app → le pedimos el código.
+  if (!awaitingVerification.has(userId)) {
+    awaitingVerification.add(userId)
+    await sendText(
+      phone,
+      "¡Dale! 🔐 Copiá el código de 6 dígitos que ves en la app y mandámelo por acá.",
+      config,
+    )
+    return
+  }
+
+  // Ya estábamos esperando el código.
+  const code = extractVerificationCode(text)
+  if (!code) {
+    await sendText(
+      phone,
+      "Necesito el código de 6 dígitos que aparece en la app. Si no lo tenés, generá uno nuevo desde Perfil.",
+      config,
+    )
+    return
+  }
+
+  try {
+    const result = await confirmVerificationCode(userId, code, config)
+    if (result.status === "verified") {
+      awaitingVerification.delete(userId)
+      info(`✔ número verificado — ${userId}`)
+      await sendText(phone, "✅ ¡Listo! Tu número quedó verificado. Ya podés ver tus gastos en la app.", config)
+    } else if (result.status === "expired") {
+      awaitingVerification.delete(userId)
+      await sendText(phone, "Ese código venció ⏱️. Generá uno nuevo desde la app y mandámelo.", config)
+    } else {
+      await sendText(phone, "Ese código no es correcto. Fijate bien en la app y reenviámelo.", config)
+    }
+  } catch (err) {
+    logError("No pude verificar el código", err)
+    await sendText(phone, "No pude verificar ahora (el servidor no responde). Probá de nuevo en un rato 🙏", config)
+  }
+}
+
+/**
  * Deshace (borra) el último gasto cargado por el usuario. El bot no toca la
  * base: le pide al backend que lo elimine por su externalMessageId.
  */
@@ -247,6 +300,12 @@ async function handleMessage(message: WhatsAppMessage): Promise<void> {
   }
 
   debug(`${message.type} de ${message.from} → "${text}"`)
+
+  // 1.3) Verificación del número (vincular la app): tiene prioridad sobre todo.
+  if (isVerificationStart(text) || awaitingVerification.has(userId)) {
+    await handleVerification(userId, phone, text)
+    return
+  }
 
   // 1.4) Saludo de inicio (botón de la app / "hola"): bienvenida y arranca limpio.
   if (isStartGreeting(text)) {

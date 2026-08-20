@@ -168,6 +168,21 @@ const START_PHRASES = new Set([
   "ayuda",
 ])
 
+/**
+ * Mensaje de arranque de la verificación de número (lo dispara el botón
+ * "Abrir WhatsApp" de la app, que precarga esta frase).
+ */
+export function isVerificationStart(text: string): boolean {
+  const clean = normalizeCommand(text)
+  return /confirmar mi numero|codigo de confirmacion|vincular mi (whatsapp|numero|cuenta)/.test(clean)
+}
+
+/** Devuelve el código si el mensaje ES un código de 6 dígitos (con o sin espacios). */
+export function extractVerificationCode(text: string): string | null {
+  const digits = text.replace(/\D/g, "")
+  return digits.length === 6 ? digits : null
+}
+
 export function isStartGreeting(text: string): boolean {
   const clean = normalizeCommand(text)
   if (!clean) return false

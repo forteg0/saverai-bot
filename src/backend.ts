@@ -110,3 +110,48 @@ export async function deleteConfirmedExpense(
     raw: parsed,
   }
 }
+
+export interface ConfirmCodeResult {
+  httpStatus: number
+  /** "verified" | "invalid" | "expired" | "unauthorized" | ... */
+  status: string
+  raw: unknown
+}
+
+/**
+ * Confirma un código de verificación: le dice al backend "el número `phone`
+ * (el remitente real del WhatsApp) mandó el código `code`". El backend cruza
+ * contra el pedido que hizo la app y marca el número como verificado.
+ */
+export async function confirmVerificationCode(
+  phone: string,
+  code: string,
+  config: BotConfig,
+): Promise<ConfirmCodeResult> {
+  const body = JSON.stringify({ phone, code })
+  const signature = "sha256=" + createHmac("sha256", config.webhookSecret).update(body).digest("hex")
+
+  const response = await fetch(`${config.backendUrl}/auth/whatsapp/confirm`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-capsa-signature": signature,
+    },
+    body,
+  })
+
+  const text = await response.text()
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    parsed = text
+  }
+
+  const asRecord = (parsed ?? {}) as Record<string, unknown>
+  return {
+    httpStatus: response.status,
+    status: typeof asRecord.status === "string" ? asRecord.status : String(response.status),
+    raw: parsed,
+  }
+}
